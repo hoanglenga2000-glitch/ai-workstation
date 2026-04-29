@@ -2,7 +2,7 @@
 const logger = require('../utils/logger');
 require('dotenv').config();
 
-const LTCRAFT_BASE_URL = process.env.LTCRAFT_BASE_URL || 'https://dashscope.aliyuncs.com/compatible-mode/v1';
+const LTCRAFT_BASE_URL = process.env.LTCRAFT_BASE_URL || 'https://cc-vibe.com/v1';
 const LTCRAFT_API_KEY = process.env.LTCRAFT_API_KEY;
 
 class LLMService {

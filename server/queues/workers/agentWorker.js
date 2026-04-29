@@ -1,122 +1,199 @@
-// queues/workers/agentWorker.js
-const { queues } = require('../agentQueue');
-const llmService = require('../../services/llmService');
+// queues/workers/agentWorker.js - 智能体任务执行 Worker
+const agentQueue = require('../agentQueue');
+const tokenService = require('../../services/tokenService');
 const db = require('../../config/database');
 const logger = require('../../utils/logger');
 
-const processTask = async (job) => {
-  const { taskId, userId, templateId, inputs, model } = job.data;
+// LTCraft API配置
+const DASHSCOPE_API_KEY = process.env.DASHSCOPE_API_KEY || process.env.LTCRAFT_API_KEY;
+const DASHSCOPE_BASE_URL = process.env.LTCRAFT_BASE_URL ? (process.env.LTCRAFT_BASE_URL.endsWith('/v1') ? process.env.LTCRAFT_BASE_URL : process.env.LTCRAFT_BASE_URL + '/v1') : 'https://cc-vibe.com/v1';
 
-  logger.info(`▶ 开始执行任务 ${taskId}`);
+class AgentWorker {
+  constructor() {
+    this.isRunning = false;
+  }
 
-  try {
-    await updateTaskStatus(taskId, 'running', null, null, new Date());
+  start() {
+    if (this.isRunning) {
+      logger.warn('AgentWorker 已在运行');
+      return;
+    }
 
-    job.progress(5);
+    logger.info('🚀 AgentWorker 启动中...');
 
-    const template = await getTemplate(templateId);
-    if (!template) throw new Error(`模板 ${templateId} 不存在`);
-
-    const result = await runMultiAgentFlow(template, inputs, {
-      model: model || template.model_recommended || 'qwen-plus',
-      onProgress: (progress, agentName, message) => {
-        job.progress(progress);
-        logger.info(`任务进度 ${taskId}`, { progress, agent: agentName, message });
-      }
+    // 处理任务（并发数3）
+    agentQueue.agentQueue.process('execute-agent', 3, async (job) => {
+      return await this.executeTask(job);
     });
 
-    const tokenUsed = result.totalTokens || 0;
-    await updateTaskStatus(taskId, 'done', result.content, tokenUsed, null, new Date());
-
-    job.progress(100);
-    logger.info(`✓ 任务 ${taskId} 完成，消耗 ${tokenUsed} tokens`);
-    return { success: true, tokenUsed };
-
-  } catch (error) {
-    logger.error(`✗ 任务 ${taskId} 失败: ${error.message}`);
-    await updateTaskStatus(taskId, 'failed', null, null, null, null, error.message);
-    throw error;
-  }
-};
-
-async function runMultiAgentFlow(template, inputs, options) {
-  const { model, onProgress } = options;
-  const config = JSON.parse(template.config);
-  const agents = config.agents || [];
-
-  let context = '';
-  let totalTokens = 0;
-
-  for (let i = 0; i < agents.length; i++) {
-    const agent = agents[i];
-    const progress = Math.round(((i + 1) / agents.length) * 90) + 5;
-
-    onProgress?.(progress - 10, agent.role, `${agent.role} 正在工作...`);
-
-    const messages = [
-      {
-        role: 'system',
-        content: buildSystemPrompt(agent, context)
-      },
-      {
-        role: 'user',
-        content: buildUserPrompt(agent, inputs, context)
-      }
-    ];
-
-    const response = await llmService.chat(model, messages, {
-      temperature: agent.temperature || 0.7,
-      maxTokens: agent.maxTokens || 4000
+    // 监听事件
+    agentQueue.agentQueue.on('completed', (job, result) => {
+      logger.info('✓ 任务完成', { jobId: job.id, taskId: result.taskId });
     });
 
-    context = response.content;
-    totalTokens += response.usage.totalTokens;
+    agentQueue.agentQueue.on('failed', (job, err) => {
+      logger.error('✗ 任务失败', { jobId: job.id, error: err.message });
+    });
 
-    onProgress?.(progress, agent.role, `${agent.role} 完成`);
+    this.isRunning = true;
+    logger.info('✓ AgentWorker 已启动，并发数: 3');
   }
 
-  return { content: context, totalTokens };
-}
+  async executeTask(job) {
+    const { taskId, userId, templateId, userInput, model } = job.data;
 
-function buildSystemPrompt(agent, previousContext) {
-  return `你是一位${agent.role}。
-你的目标：${agent.goal}
-你的背景：${agent.backstory}
+    try {
+      // 1. 更新任务状态
+      await db.query(
+        'UPDATE agent_tasks SET status = ?, started_at = NOW() WHERE id = ?',
+        ['running', taskId]
+      );
 
-${previousContext ? `前一步的工作成果：\n${previousContext}` : ''}`;
-}
+      // 2. 获取模板
+      const [[template]] = await db.query(
+        'SELECT * FROM agent_templates WHERE id = ?',
+        [templateId]
+      );
 
-function buildUserPrompt(agent, inputs, previousContext) {
-  let prompt = agent.task_description || '';
+      if (!template) {
+        throw new Error('模板不存在: ' + templateId);
+      }
 
-  for (const [key, value] of Object.entries(inputs)) {
-    prompt = prompt.replace(`{${key}}`, value);
+      const templateName = template.name;
+
+      // 推送任务开始
+      if (global.wsManager) {
+        global.wsManager.pushTaskStarted(taskId, { model, templateName });
+      }
+
+      // 3. 构建Prompt
+      const systemPrompt = template.system_prompt || '你是一个智能助手';
+      let userPrompt = template.user_prompt_template || '';
+
+      // 替换变量
+      Object.keys(userInput).forEach(key => {
+        const regex = new RegExp('{{' + key + '}}', 'g');
+        userPrompt = userPrompt.replace(regex, userInput[key]);
+      });
+
+      // 4. 调用LLM
+      logger.info('调用LLM', { taskId, model, promptLength: userPrompt.length });
+
+      const startTime = Date.now();
+      const response = await this.callLLM(model, systemPrompt, userPrompt);
+      const duration = Date.now() - startTime;
+
+      const { content, tokensUsed } = response;
+
+      // 5. Token结算
+      await tokenService.settleTask(taskId, userId, tokensUsed, model);
+
+      // 6. 保存结果
+      await db.query(
+        'UPDATE agent_tasks SET status = ?, result = ?, token_used = ?, completed_at = NOW(), execution_time = ? WHERE id = ?',
+        ['completed', content, tokensUsed, duration, taskId]
+      );
+
+      // 推送任务完成
+      if (global.wsManager) {
+        global.wsManager.pushTaskCompleted(taskId, { result: content, tokensUsed, duration });
+      }
+
+      logger.info('任务执行成功', { taskId, tokensUsed, duration });
+
+      return {
+        success: true,
+        taskId,
+        tokensUsed,
+        duration,
+        result: content
+      };
+
+    } catch (error) {
+      logger.error('任务执行失败', { taskId, error: error.message });
+
+      await db.query(
+        'UPDATE agent_tasks SET status = ?, error_message = ? WHERE id = ?',
+        ['failed', error.message, taskId]
+      );
+
+      // 推送任务失败
+      if (global.wsManager) {
+        global.wsManager.pushTaskFailed(taskId, { error: error.message });
+      }
+
+      throw error;
+    }
   }
 
-  return prompt;
+  async callLLM(model, systemPrompt, userPrompt) {
+    try {
+      const fetch = (await import('node-fetch')).default;
+      
+      const response = await fetch(DASHSCOPE_BASE_URL + '/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': 'Bearer ' + DASHSCOPE_API_KEY,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: model || 'qwen-plus',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: 0.7,
+          max_tokens: 4000
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error('LLM调用失败: ' + errorText);
+      }
+
+      const data = await response.json();
+      const { choices, usage } = data;
+
+      return {
+        content: choices[0].message.content,
+        tokensUsed: usage.total_tokens
+      };
+
+    } catch (error) {
+      logger.error('LLM调用失败', { model, error: error.message });
+      throw error;
+    }
+  }
+
+  async stop() {
+    if (!this.isRunning) {
+      return;
+    }
+
+    logger.info('停止 AgentWorker...');
+    await agentQueue.agentQueue.close();
+    this.isRunning = false;
+    logger.info('✓ AgentWorker 已停止');
+  }
 }
 
-async function updateTaskStatus(taskId, status, output, tokenUsed, startedAt, finishedAt, errorMsg) {
-  const fields = ['status = ?'];
-  const values = [status];
+const worker = new AgentWorker();
 
-  if (output !== null && output !== undefined) { fields.push('outputs = ?'); values.push(output); }
-  if (tokenUsed !== null) { fields.push('token_used = ?'); values.push(tokenUsed); }
-  if (startedAt) { fields.push('started_at = ?'); values.push(startedAt); }
-  if (finishedAt) { fields.push('finished_at = ?'); values.push(finishedAt); }
-  if (errorMsg) { fields.push('error_msg = ?'); values.push(errorMsg); }
+if (require.main === module) {
+  worker.start();
 
-  values.push(taskId);
-  await db.query(`UPDATE agent_tasks SET ${fields.join(', ')} WHERE id = ?`, values);
+  process.on('SIGTERM', async () => {
+    logger.info('收到 SIGTERM 信号');
+    await worker.stop();
+    process.exit(0);
+  });
+
+  process.on('SIGINT', async () => {
+    logger.info('收到 SIGINT 信号');
+    await worker.stop();
+    process.exit(0);
+  });
 }
 
-async function getTemplate(templateId) {
-  const [rows] = await db.query('SELECT * FROM agent_templates WHERE id = ?', [templateId]);
-  return rows[0];
-}
-
-Object.values(queues).forEach(queue => {
-  queue.process(3, processTask);
-});
-
-module.exports = { processTask };
+module.exports = worker;

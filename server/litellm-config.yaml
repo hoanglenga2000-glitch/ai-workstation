@@ -1,0 +1,26 @@
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: claude-3-5-sonnet-20241022
+      api_base: https://ai.ltcraft.cn/v1
+      api_key: sk-xxx
+      
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: claude-3-5-haiku-20241022
+      api_base: https://ai.ltcraft.cn/v1
+      api_key: sk-xxx
+
+  - model_name: claude-opus
+    litellm_params:
+      model: claude-opus-4-20250514
+      api_base: https://ai.ltcraft.cn/v1
+      api_key: sk-xxx
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  
+general_settings:
+  master_key: aiws_litellm_2024
+  database_url: sqlite:////www/wwwroot/ai.zhjjq.tech/server/litellm.db

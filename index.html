@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <link
@@ -29,20 +29,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
     <!-- Primary Meta Tags -->
-    <title>Shadcn Admin</title>
-    <meta name="title" content="Shadcn Admin" />
+    <title>移动业务AI超市</title>
+    <meta name="title" content="移动业务AI超市" />
     <meta
       name="description"
-      content="Admin Dashboard UI built with Shadcn and Vite."
+      content="移动业务AI超市 - 智能体协作平台"
     />
 
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://shadcn-admin.netlify.app" />
-    <meta property="og:title" content="Shadcn Admin" />
+    <meta property="og:title" content="移动业务AI超市" />
     <meta
       property="og:description"
-      content="Admin Dashboard UI built with Shadcn and Vite."
+      content="移动业务AI超市 - 智能体协作平台"
     />
     <meta
       property="og:image"
@@ -52,10 +52,10 @@
     <!-- Twitter -->
     <meta property="twitter:card" content="summary_large_image" />
     <meta property="twitter:url" content="https://shadcn-admin.netlify.app" />
-    <meta property="twitter:title" content="Shadcn Admin" />
+    <meta property="twitter:title" content="移动业务AI超市" />
     <meta
       property="twitter:description"
-      content="Admin Dashboard UI built with Shadcn and Vite."
+      content="移动业务AI超市 - 智能体协作平台"
     />
     <meta
       property="twitter:image"
@@ -71,7 +71,25 @@
     />
 
     <meta name="theme-color" content="#fff" />
-    <script type="module" crossorigin src="/assets/index-DHR3m87T.js"></script>
+    <script>
+      window.__APP_ERRORS = [];
+      window.addEventListener('error', function(e) {
+        window.__APP_ERRORS.push('ERR: ' + e.message + ' @ ' + (e.filename||'') + ':' + (e.lineno||''));
+      });
+      window.addEventListener('unhandledrejection', function(e) {
+        window.__APP_ERRORS.push('REJ: ' + String(e.reason).substring(0, 500));
+      });
+      var _origCE = console.error;
+      console.error = function() {
+        var msg = Array.prototype.slice.call(arguments).map(function(a){
+          if (a && a.stack) return a.stack.substring(0,2000);
+          return String(a).substring(0,500);
+        }).join(' ');
+        window.__APP_ERRORS.push('CE: ' + msg);
+        _origCE.apply(console, arguments);
+      };
+    </script>
+    <script type="module" crossorigin src="/assets/index-Cl1AsVO9v2.js"></script>
     <link rel="modulepreload" crossorigin href="/assets/jsx-runtime-m7G7yzlP.js">
     <link rel="modulepreload" crossorigin href="/assets/preload-helper-CQ36nxok.js">
     <link rel="modulepreload" crossorigin href="/assets/dist-CcCfsdJO.js">
@@ -94,9 +112,108 @@
     <link rel="modulepreload" crossorigin href="/assets/button-B-KW_lKh.js">
     <link rel="modulepreload" crossorigin href="/assets/cookies-ifEBlNk6.js">
     <link rel="stylesheet" crossorigin href="/assets/index-Bc0vSnLL.css">
+    <style>
+      /* === 对话气泡 Markdown 渲染修复 === */
+      /* 气泡容器：强制约束宽度，防止内容撑开 */
+      .max-w-\[80\%\] {
+        max-width: 80%;
+        min-width: 0;           /* flex 子元素收缩 */
+        overflow-wrap: break-word;
+        word-break: break-word;
+      }
+
+      /* Markdown 渲染的所有子元素 */
+      .max-w-\[80\%\] p,
+      .max-w-\[80\%\] li,
+      .max-w-\[80\%\] h1,
+      .max-w-\[80\%\] h2,
+      .max-w-\[80\%\] h3,
+      .max-w-\[80\%\] h4,
+      .max-w-\[80\%\] h5,
+      .max-w-\[80\%\] h6,
+      .max-w-\[80\%\] blockquote {
+        overflow-wrap: break-word;
+        word-break: break-word;
+        max-width: 100%;
+      }
+
+      /* 代码块：水平滚动而非溢出 */
+      .max-w-\[80\%\] pre {
+        overflow-x: auto;
+        max-width: 100%;
+        border-radius: 6px;
+        padding: 12px;
+        margin: 8px 0;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      /* 行内代码 */
+      .max-w-\[80\%\] code {
+        word-break: break-all;
+        font-size: 0.875em;
+      }
+
+      /* 表格：水平滚动 */
+      .max-w-\[80\%\] table {
+        display: block;
+        overflow-x: auto;
+        max-width: 100%;
+        border-collapse: collapse;
+        margin: 8px 0;
+      }
+
+      /* 图片自适应 */
+      .max-w-\[80\%\] img {
+        max-width: 100%;
+        height: auto;
+        border-radius: 6px;
+      }
+
+      /* 长链接强制换行 */
+      .max-w-\[80\%\] a {
+        word-break: break-all;
+      }
+
+      /* 列表样式优化 */
+      .max-w-\[80\%\] ul,
+      .max-w-\[80\%\] ol {
+        padding-left: 1.5em;
+        margin: 4px 0;
+      }
+
+      /* 段落间距 */
+      .max-w-\[80\%\] p {
+        margin: 4px 0;
+        line-height: 1.6;
+      }
+
+      /* 粗体文本不应影响布局 */
+      .max-w-\[80\%\] strong {
+        font-weight: 600;
+      }
+
+      /* === 聊天滚动区域修复 === */
+      /* 防止 display:table 中间层撑开宽度 */
+      .flex-1.p-4 {
+        overflow: hidden;
+      }
+
+      /* 聊天容器强制约束 */
+      .space-y-4 {
+        max-width: 100%;
+        overflow: hidden;
+      }
+
+      /* flex 行：防止子元素溢出 */
+      .space-y-4 > div {
+        max-width: 100%;
+      }
+    </style>
   </head>
 
   <body>
-    <div id="root"></div>
+    <div id="root"></div>
+
   </body>
 </html>

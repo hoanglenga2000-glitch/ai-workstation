@@ -1,32 +1,28 @@
 # Dependencies
 node_modules/
-package-lock.json
+server/node_modules/
 
-# Environment variables
+# Environment variables (contains API keys)
 .env
-.env.local
-.env.*.local
+server/.env
 
 # Logs
 logs/
 *.log
 npm-debug.log*
 
-# Database
-*.sql
-*.sqlite
-*.db
-
-# Uploads
-uploads/
-
-# System files
+# OS files
 .DS_Store
 Thumbs.db
-.user.ini
+
+# PM2
+ecosystem.config.js.bak
+
+# Backups
+*.bak
+*.backup
+*.orig
 
 # IDE
 .vscode/
 .idea/
-*.swp
-*.swo

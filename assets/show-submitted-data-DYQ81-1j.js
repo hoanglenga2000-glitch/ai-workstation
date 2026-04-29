@@ -1,0 +1,1 @@
+import{a as e,t}from"./jsx-runtime-m7G7yzlP.js";import{M as n}from"./index-Cl1AsVO9.js";var r=e(t(),1);function i(e,t=`您提交了以下数据：`){n.message(t,{description:(0,r.jsx)(`pre`,{className:`mt-2 w-full overflow-x-auto rounded-md bg-slate-950 p-4`,children:(0,r.jsx)(`code`,{className:`text-white`,children:JSON.stringify(e,null,2)})})})}export{i as t};
