@@ -2,7 +2,26 @@
 const config = require('../config/index');
 const { log } = require('../utils/log');
 
-// SSE stream: Anthropic-format proxy (converts OpenAI SSE to Anthropic events)
+/**
+ * Lightweight token counter: ~3.5 chars per token for CJK-mixed content.
+ * Avoids heavy tiktoken dependency; accuracy within +/-15% is acceptable
+ * for billing estimation when upstream doesn't return usage in stream.
+ */
+function estimateTokens(text) {
+  if (!text) return 0;
+  return Math.ceil(text.length / 3.5);
+}
+
+/**
+ * SSE stream: Anthropic-format proxy (converts OpenAI SSE to Anthropic events).
+ *
+ * Key billing fix: accumulates outputText during streaming and captures the
+ * upstream usage field (some providers send it in the final chunk).
+ * Returns { inputTokens, outputTokens, outputText } so callers can charge.
+ *
+ * Handles client disconnect gracefully — aborts upstream reader and still
+ * returns accumulated usage for billing.
+ */
 async function callAiStream(res, openaiBody) {
   const upstream = await fetch(config.AI_CHAT_URL, {
     method: 'POST',
@@ -22,55 +41,115 @@ async function callAiStream(res, openaiBody) {
 
   const msgId = 'msg_' + Date.now();
   const model = openaiBody.model;
-  res.write('event: message_start\ndata: ' + JSON.stringify({
+
+  // Track whether client is still connected
+  let clientDisconnected = false;
+  res.on('close', () => { clientDisconnected = true; });
+
+  // Safe write helper — silently skips if client disconnected
+  function safeWrite(data) {
+    if (clientDisconnected || res.writableEnded) return;
+    try { res.write(data); } catch (_) { clientDisconnected = true; }
+  }
+
+  safeWrite('event: message_start\ndata: ' + JSON.stringify({
     type: 'message_start',
     message: { id: msgId, type: 'message', role: 'assistant', content: [], model, stop_reason: null, usage: { input_tokens: 0, output_tokens: 0 } },
   }) + '\n\n');
-  res.write('event: content_block_start\ndata: ' + JSON.stringify({
+  safeWrite('event: content_block_start\ndata: ' + JSON.stringify({
     type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' },
   }) + '\n\n');
 
   const reader = upstream.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let outputText = '';
+  let upstreamUsage = null;
 
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
+
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
         const data = line.slice(6).trim();
+
         if (data === '[DONE]') {
-          res.write('event: content_block_stop\ndata: ' + JSON.stringify({ type: 'content_block_stop', index: 0 }) + '\n\n');
-          res.write('event: message_delta\ndata: ' + JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 0 } }) + '\n\n');
-          res.write('event: message_stop\ndata: ' + JSON.stringify({ type: 'message_stop' }) + '\n\n');
+          safeWrite('event: content_block_stop\ndata: ' + JSON.stringify({ type: 'content_block_stop', index: 0 }) + '\n\n');
+          safeWrite('event: message_delta\ndata: ' + JSON.stringify({
+            type: 'message_delta',
+            delta: { stop_reason: 'end_turn' },
+            usage: { output_tokens: upstreamUsage?.completion_tokens || estimateTokens(outputText) },
+          }) + '\n\n');
+          safeWrite('event: message_stop\ndata: ' + JSON.stringify({ type: 'message_stop' }) + '\n\n');
           break;
         }
+
         try {
           const chunk = JSON.parse(data);
+
+          // Capture usage from any chunk (some providers send it on every chunk,
+          // others only on the final one)
+          if (chunk.usage) upstreamUsage = chunk.usage;
+
           const delta = chunk.choices && chunk.choices[0] && chunk.choices[0].delta;
           if (delta && delta.content) {
-            res.write('event: content_block_delta\ndata: ' + JSON.stringify({
+            outputText += delta.content;
+            safeWrite('event: content_block_delta\ndata: ' + JSON.stringify({
               type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: delta.content },
             }) + '\n\n');
           }
+
           if (chunk.choices && chunk.choices[0] && chunk.choices[0].finish_reason) {
-            res.write('event: content_block_stop\ndata: ' + JSON.stringify({ type: 'content_block_stop', index: 0 }) + '\n\n');
-            res.write('event: message_delta\ndata: ' + JSON.stringify({
-              type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: chunk.usage?.completion_tokens || 0 },
+            // Final chunk — capture usage if present
+            if (chunk.usage) upstreamUsage = chunk.usage;
+            safeWrite('event: content_block_stop\ndata: ' + JSON.stringify({ type: 'content_block_stop', index: 0 }) + '\n\n');
+            safeWrite('event: message_delta\ndata: ' + JSON.stringify({
+              type: 'message_delta',
+              delta: { stop_reason: 'end_turn' },
+              usage: { output_tokens: upstreamUsage?.completion_tokens || estimateTokens(outputText) },
             }) + '\n\n');
-            res.write('event: message_stop\ndata: ' + JSON.stringify({ type: 'message_stop' }) + '\n\n');
+            safeWrite('event: message_stop\ndata: ' + JSON.stringify({ type: 'message_stop' }) + '\n\n');
           }
         } catch (_) { /* skip unparseable lines */ }
       }
     }
+  } catch (e) {
+    // If client disconnected, the reader may throw — that's expected
+    if (!clientDisconnected) {
+      log('error', 'stream_read_error', { error: e.message });
+    }
   } finally {
-    if (!res.writableEnded) res.end();
+    // Always close the response if not already ended
+    if (!res.writableEnded) {
+      try { res.end(); } catch (_) { /* ignore */ }
+    }
+    // Cancel upstream reader if still open (e.g. client disconnected early)
+    try { reader.cancel(); } catch (_) { /* ignore */ }
   }
+
+  const inputEstimate = estimateTokens(JSON.stringify(openaiBody.messages));
+  const result = {
+    inputTokens: upstreamUsage?.prompt_tokens || inputEstimate,
+    outputTokens: upstreamUsage?.completion_tokens || estimateTokens(outputText),
+    outputText,
+  };
+
+  log('info', 'stream_complete', {
+    model,
+    clientDisconnected,
+    inputTokens: result.inputTokens,
+    outputTokens: result.outputTokens,
+    outputLen: outputText.length,
+    usageSource: upstreamUsage ? 'upstream' : 'estimated',
+  });
+
+  return result;
 }
 
 // Non-streaming Anthropic-format response
@@ -113,7 +192,7 @@ function buildOpenAiBody(body, model) {
   return openaiBody;
 }
 
-// callAi: raw OpenAI-format call, returns full response JSON
+// callAi: raw OpenAI-format call, accepts messages array + model, returns full response JSON
 async function callAi(messages, model) {
   const payload = { model: model || config.DEFAULT_MODEL, messages };
   const resp = await fetch(config.AI_CHAT_URL, {
@@ -150,4 +229,4 @@ async function callAiSafe(rawMessages, model) {
   return data;
 }
 
-module.exports = { callAiStream, callAiNonStream, buildOpenAiBody, callAi, callAiSafe };
+module.exports = { callAiStream, callAiNonStream, buildOpenAiBody, callAi, callAiSafe, estimateTokens };

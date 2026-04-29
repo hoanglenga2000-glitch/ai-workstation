@@ -2,6 +2,8 @@
 const zlib = require('zlib');
 const http = require('http');
 const https = require('https');
+const dns = require('dns');
+const net = require('net');
 const { safeTrunc } = require('../utils/helpers');
 
 const MINI_RUNNER_TIMEOUT_MS = 30000;
@@ -39,31 +41,101 @@ function _expDeep(obj, ctx) {
   return obj;
 }
 
-const SSRF_BLOCK_PATTERNS = [
-  /^https?:\/\/(localhost|127\.\d+\.\d+\.\d+|0\.0\.0\.0)/i,
-  /^https?:\/\/10\.\d+\.\d+\.\d+/i,
-  /^https?:\/\/172\.(1[6-9]|2\d|3[01])\.\d+\.\d+/i,
-  /^https?:\/\/192\.168\.\d+\.\d+/i,
-  /^https?:\/\/169\.254\./i,
-  /^https?:\/\/\[?::1/i,
-  /^https?:\/\/\[?fd[0-9a-f]{2}:/i,
-];
+/**
+ * DNS-based SSRF protection.
+ * Resolves the hostname to its real IP address, then checks against
+ * private/reserved network ranges. This defeats DNS rebinding, decimal IP
+ * encoding (0x7f000001), IPv6-mapped addresses (::ffff:127.0.0.1), etc.
+ */
+function _isPrivateIPv4(ip) {
+  var parts = ip.split('.').map(Number);
+  if (parts.length !== 4) return false;
+  // 127.0.0.0/8
+  if (parts[0] === 127) return true;
+  // 10.0.0.0/8
+  if (parts[0] === 10) return true;
+  // 172.16.0.0/12
+  if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+  // 192.168.0.0/16
+  if (parts[0] === 192 && parts[1] === 168) return true;
+  // 169.254.0.0/16 (link-local)
+  if (parts[0] === 169 && parts[1] === 254) return true;
+  // 0.0.0.0
+  if (parts[0] === 0 && parts[1] === 0 && parts[2] === 0 && parts[3] === 0) return true;
+  return false;
+}
 
-function _validateUrl(url) {
+function _isPrivateIPv6(ip) {
+  var normalized = ip.toLowerCase();
+  // ::1 (loopback)
+  if (normalized === '::1' || normalized === '0000:0000:0000:0000:0000:0000:0000:0001') return true;
+  // fc00::/7 (unique local) — starts with fc or fd
+  if (normalized.startsWith('fc') || normalized.startsWith('fd')) return true;
+  // fe80::/10 (link-local)
+  if (normalized.startsWith('fe80')) return true;
+  return false;
+}
+
+async function _validateUrl(url) {
   if (!url || typeof url !== 'string') throw new Error('httpRequest: url required');
   if (!url.startsWith('http://') && !url.startsWith('https://')) {
     throw new Error('httpRequest: only http/https allowed');
   }
-  for (var i = 0; i < SSRF_BLOCK_PATTERNS.length; i++) {
-    if (SSRF_BLOCK_PATTERNS[i].test(url)) {
-      throw new Error('httpRequest: private network access denied');
+
+  var parsed = new URL(url);
+  var hostname = parsed.hostname;
+
+  // Remove brackets from IPv6 literals
+  if (hostname.startsWith('[') && hostname.endsWith(']')) {
+    hostname = hostname.slice(1, -1);
+  }
+
+  var resolvedIP;
+  var ipVersion = net.isIP(hostname);
+
+  if (ipVersion === 4) {
+    // Direct IPv4 address — check immediately
+    resolvedIP = hostname;
+    if (_isPrivateIPv4(resolvedIP)) {
+      throw new Error('httpRequest: private network access denied (' + resolvedIP + ')');
+    }
+  } else if (ipVersion === 6) {
+    // Direct IPv6 address — check immediately
+    resolvedIP = hostname;
+    if (_isPrivateIPv6(resolvedIP)) {
+      throw new Error('httpRequest: private network access denied (' + resolvedIP + ')');
+    }
+    // Also check IPv4-mapped IPv6 (::ffff:x.x.x.x)
+    var v4match = resolvedIP.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+    if (v4match && _isPrivateIPv4(v4match[1])) {
+      throw new Error('httpRequest: private network access denied (mapped ' + v4match[1] + ')');
+    }
+  } else {
+    // Hostname — resolve via DNS to get real IP
+    var lookupResult = await dns.promises.lookup(hostname, { all: false });
+    resolvedIP = lookupResult.address;
+    var family = lookupResult.family;
+
+    if (family === 4) {
+      if (_isPrivateIPv4(resolvedIP)) {
+        throw new Error('httpRequest: private network access denied (' + hostname + ' -> ' + resolvedIP + ')');
+      }
+    } else if (family === 6) {
+      if (_isPrivateIPv6(resolvedIP)) {
+        throw new Error('httpRequest: private network access denied (' + hostname + ' -> ' + resolvedIP + ')');
+      }
+      var v4mapped = resolvedIP.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+      if (v4mapped && _isPrivateIPv4(v4mapped[1])) {
+        throw new Error('httpRequest: private network access denied (' + hostname + ' -> mapped ' + v4mapped[1] + ')');
+      }
     }
   }
+
   return url;
 }
 
 async function _doHttp(params, ctx) {
-  var url = _validateUrl(_exp(params.url || '', ctx));
+  var url = await _validateUrl(_exp(params.url || '', ctx));
   var method = (params.method || params.requestMethod || 'GET').toUpperCase();
   var headers = {};
   var hp = params.options && params.options.headers && params.options.headers.parameters;

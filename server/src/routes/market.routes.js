@@ -1,10 +1,11 @@
 'use strict';
 const express = require('express');
+
 const config = require('../config/index');
 const { getPool } = require('../config/database');
 const { asyncRoute } = require('../middleware/errorHandler');
-const { tokenAuth } = require('../middleware/auth');
-const { callAi } = require('../services/ai.service');
+const { callAiSafe } = require('../services/ai.service');
+const { log } = require('../utils/log');
 
 const router = express.Router();
 
@@ -29,6 +30,18 @@ router.get('/api/market/agents/:id', asyncRoute(async (req, res) => {
   res.json(rows[0]);
 }));
 
+/**
+ * 智能体调用 — 流水单模式（最终一致性保证）
+ *
+ * 流程:
+ * 1. 事务内: 扣费 + 插入 status='pending' 流水单
+ * 2. 事务外: 调用 AI
+ * 3. 成功: UPDATE 流水单 status='completed'
+ * 4. 失败: 事务内: UPDATE 流水单 status='failed' + 退款
+ *
+ * 崩溃恢复: 如果进程在步骤2后崩溃，流水单保持 'pending'。
+ * 可通过定时任务扫描超时的 pending 记录进行退款补偿。
+ */
 router.post('/api/market/agents/:id/use', asyncRoute(async (req, res) => {
   const agentId = req.params.id;
   const pool = getPool();
@@ -39,39 +52,100 @@ router.post('/api/market/agents/:id/use', asyncRoute(async (req, res) => {
   const userId = req.user ? req.user.id : null;
   if (!userId) return res.status(401).json({ error: '请先登录' });
 
-  if (agent.price_type !== 'free') {
-    const cost = agent.price || 0;
-    // Atomic deduction — prevents race condition
-    const [deductResult] = await pool.query(
-      'UPDATE user_balance SET balance = balance - ?, total_consumed = total_consumed + ? WHERE user_id = ? AND balance >= ?',
-      [cost, cost, userId, cost]
-    );
-    if (deductResult.affectedRows === 0) {
-      return res.status(402).json({ error: '余额不足' });
-    }
-  }
-
   const userMessage = req.body.message || req.body.input || '你好';
   const systemPrompt = agent.prompt_template || '你是一个AI助手';
+  const cost = (agent.price_type !== 'free') ? (agent.price || 0) : 0;
+  let usageId = null;
 
+  // Step 1: 事务 — 扣费 + 创建 pending 流水单
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    if (cost > 0) {
+      const [deductResult] = await conn.query(
+        'UPDATE user_balance SET balance = balance - ?, total_consumed = total_consumed + ? WHERE user_id = ? AND balance >= ?',
+        [cost, cost, userId, cost]
+      );
+      if (deductResult.affectedRows === 0) {
+        await conn.rollback();
+        conn.release();
+        return res.status(402).json({ error: '余额不足' });
+      }
+    }
+
+    const [insertResult] = await conn.query(
+      'INSERT INTO agent_usage_log (agent_id, user_id, input_text, output_text, tokens_used, status, cost, created_at) VALUES (?, ?, ?, ?, 0, ?, ?, NOW())',
+      [agentId, userId, userMessage, '', 'pending', cost]
+    );
+    usageId = insertResult.insertId;
+
+    await conn.commit();
+    log('info', 'agent_use_pending', { usageId, agentId, userId, cost });
+  } catch (e) {
+    await conn.rollback();
+    conn.release();
+    log('error', 'agent_use_deduct_failed', { agentId, userId, error: e.message });
+    return res.status(500).json({ error: '扣费失败: ' + e.message });
+  } finally {
+    conn.release();
+  }
+
+  // Step 2: 调用 AI（事务外，不持有连接）
   try {
     const [modelRows] = await pool.query('SELECT * FROM model_market WHERE model_id=?', [agent.model]);
     const modelId = modelRows.length ? modelRows[0].model_id : config.DEFAULT_MODEL;
-    const result = await callAi(systemPrompt, userMessage, { model: modelId });
 
+    // callAiSafe 接受 messages 数组，不是 (prompt, message, opts)
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userMessage },
+    ];
+    const aiData = await callAiSafe(messages, modelId);
+    const aiContent = (aiData && aiData.choices && aiData.choices[0] && aiData.choices[0].message && aiData.choices[0].message.content) || '(无回复)';
+    const tokensUsed = aiData?.usage?.total_tokens || 0;
+
+    // Step 3: 成功 — 更新流水单
     await pool.query(
-      'INSERT INTO agent_usage_log (agent_id, user_id, input_text, output_text, tokens_used) VALUES (?,?,?,?,?)',
-      [agentId, userId, userMessage, result.content, result.usage?.total_tokens || 0]
-    );
+      'UPDATE agent_usage_log SET status=?, output_text=?, tokens_used=? WHERE id=?',
+      ['completed', aiContent, tokensUsed, usageId]
 
+    );
     await pool.query('UPDATE agent_market SET usage_count=usage_count+1 WHERE id=?', [agentId]);
-    res.json({ success: true, response: result.content, usage: result.usage });
+
+    log('info', 'agent_use_completed', { usageId, agentId, userId, tokensUsed });
+    res.json({ success: true, response: aiContent, usage: aiData?.usage || {} });
+
   } catch (e) {
-    // Refund on AI failure for paid agents
-    if (agent.price_type !== 'free') {
-      const cost = agent.price || 0;
-      await pool.query('UPDATE user_balance SET balance = balance + ?, total_consumed = total_consumed - ? WHERE user_id = ?', [cost, cost, userId]);
+    // Step 4: 失败 — 事务内退款 + 标记流水单
+    log('error', 'agent_use_ai_failed', { usageId, agentId, userId, error: e.message });
+
+    const refundConn = await pool.getConnection();
+    try {
+      await refundConn.beginTransaction();
+
+      await refundConn.query(
+        'UPDATE agent_usage_log SET status=?, error_msg=? WHERE id=? AND status=?',
+        ['failed', e.message.slice(0, 500), usageId, 'pending']
+      );
+
+      if (cost > 0) {
+        await refundConn.query(
+          'UPDATE user_balance SET balance = balance + ?, total_consumed = total_consumed - ? WHERE user_id = ?',
+          [cost, cost, userId]
+        );
+        log('info', 'agent_use_refunded', { usageId, agentId, userId, cost });
+      }
+
+      await refundConn.commit();
+    } catch (refundErr) {
+      await refundConn.rollback();
+      // 退款失败是严重事件，必须记录以便人工介入
+      log('error', 'agent_use_refund_failed', { usageId, agentId, userId, cost, error: refundErr.message });
+    } finally {
+      refundConn.release();
     }
+
     res.status(502).json({ error: 'AI 调用失败: ' + e.message });
   }
 }));
@@ -83,7 +157,7 @@ router.post('/api/market/agents', asyncRoute(async (req, res) => {
   const pool = getPool();
   const [result] = await pool.query(
     'INSERT INTO agent_market (name, category, description, prompt_template, model, price_type, author_id, is_public) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [name, category || 'other', description, prompt_template, model || 'gpt-5.4', price_type || 'free', userId, false]
+    [name, category || 'other', description || '', prompt_template, model || config.DEFAULT_MODEL, price_type || 'free', userId, false]
   );
   res.json({ success: true, id: result.insertId });
 }));
