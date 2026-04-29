@@ -1,1 +1,0 @@
-import{o as e,u as t}from"./en-US-BxEztcYl.js";function n(t,n,r){let[i,a]=e(r?.in,t,n),o=i.getFullYear()-a.getFullYear(),s=i.getMonth()-a.getMonth();return o*12+s}function r(e,n){let r=t(e,n?.in),i=r.getMonth();return r.setFullYear(r.getFullYear(),i+1,0),r.setHours(23,59,59,999),r}export{n,r as t};
