@@ -7,10 +7,11 @@ const router = express.Router();
 
 router.get('/tasks', asyncRoute(async (req, res) => {
   const { assignee, status, priority } = req.query;
+  const userId = req.user?.id;
   let sql =
     "SELECT t.*, COALESCE(a.name, t.assignee, '未分配') AS assignee_name " +
-    'FROM tasks t LEFT JOIN agents a ON t.assignee = a.id WHERE 1=1';
-  const params = [];
+    'FROM tasks t LEFT JOIN agents a ON t.assignee = a.id WHERE (t.created_by = ? OR t.created_by IS NULL)';
+  const params = [userId];
   if (assignee) { sql += ' AND t.assignee = ?'; params.push(assignee); }
   if (status) { sql += ' AND t.status = ?'; params.push(status); }
   if (priority) { sql += ' AND t.priority = ?'; params.push(priority); }
@@ -24,10 +25,11 @@ router.post('/tasks', asyncRoute(async (req, res) => {
   const { title, description, assignee, priority, status, deadline, progress } = req.body || {};
   if (!title) return res.status(400).json({ error: 'title required' });
   if (!assignee) return res.status(400).json({ error: 'assignee required' });
+  const userId = req.user?.id || null;
   const pool = getPool();
   const [r] = await pool.query(
-    'INSERT INTO tasks (title, description, assignee, priority, status, deadline, progress) VALUES (?,?,?,?,?,?,?)',
-    [title, description || '', assignee, priority || 'medium', status || 'todo', deadline || null, progress || 0],
+    'INSERT INTO tasks (title, description, assignee, priority, status, deadline, progress, created_by) VALUES (?,?,?,?,?,?,?,?)',
+    [title, description || '', assignee, priority || 'medium', status || 'todo', deadline || null, progress || 0, userId],
   );
   res.json({ id: r.insertId, success: true });
 }));

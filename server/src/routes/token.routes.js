@@ -2,12 +2,11 @@
 const express = require('express');
 const { getPool } = require('../config/database');
 const { asyncRoute } = require('../middleware/errorHandler');
-const { tokenAuth } = require('../middleware/auth');
 
 const router = express.Router();
 
 router.get('/api/token/balance', asyncRoute(async (req, res) => {
-  if (!tokenAuth(req)) return res.status(401).json({ error: '请先登录' });
+  if (!req.user) return res.status(401).json({ error: '请先登录' });
   const userId = req.user.id;
   const pool = getPool();
   const [rows] = await pool.query('SELECT * FROM user_balance WHERE user_id=?', [userId]);
@@ -19,7 +18,7 @@ router.get('/api/token/balance', asyncRoute(async (req, res) => {
 }));
 
 router.get('/api/token/usage', asyncRoute(async (req, res) => {
-  if (!tokenAuth(req)) return res.status(401).json({ error: '请先登录' });
+  if (!req.user) return res.status(401).json({ error: '请先登录' });
   const userId = req.user.id;
   const { limit = 50, offset = 0 } = req.query;
   const pool = getPool();
@@ -31,7 +30,7 @@ router.get('/api/token/usage', asyncRoute(async (req, res) => {
 }));
 
 router.get('/api/token/stats', asyncRoute(async (req, res) => {
-  if (!tokenAuth(req)) return res.status(401).json({ error: '请先登录' });
+  if (!req.user) return res.status(401).json({ error: '请先登录' });
   const userId = req.user.id;
   const pool = getPool();
   const [balanceRows] = await pool.query('SELECT * FROM user_balance WHERE user_id=?', [userId]);
@@ -51,18 +50,21 @@ router.get('/api/token/stats', asyncRoute(async (req, res) => {
 }));
 
 router.post('/api/token/recharge', asyncRoute(async (req, res) => {
-  if (!tokenAuth(req)) return res.status(401).json({ error: '请先登录' });
-  const userId = req.user.id;
-  const { amount } = req.body || {};
-  if (!amount || amount <= 0) return res.status(400).json({ error: '充值金额无效' });
-  const pool = getPool();
-  const [rows] = await pool.query('SELECT * FROM user_balance WHERE user_id=?', [userId]);
-  if (!rows.length) {
-    await pool.query('INSERT INTO user_balance (user_id, balance, total_recharged) VALUES (?, ?, ?)', [userId, amount, amount]);
-  } else {
-    await pool.query('UPDATE user_balance SET balance=balance+?, total_recharged=total_recharged+? WHERE user_id=?', [amount, amount, userId]);
+  if (!req.user) return res.status(401).json({ error: '请先登录' });
+  if (req.user.role !== 'admin') return res.status(403).json({ error: '支付系统接入中，暂不开放自助充值' });
+  const { user_id, amount } = req.body || {};
+  const targetUserId = user_id || req.user.id;
+  if (!amount || typeof amount !== 'number' || amount <= 0 || amount > 100000) {
+    return res.status(400).json({ error: '充值金额无效（0-100000）' });
   }
-  res.json({ success: true, message: '充值成功' });
+  const pool = getPool();
+  const [rows] = await pool.query('SELECT * FROM user_balance WHERE user_id=?', [targetUserId]);
+  if (!rows.length) {
+    await pool.query('INSERT INTO user_balance (user_id, balance, total_recharged) VALUES (?, ?, ?)', [targetUserId, amount, amount]);
+  } else {
+    await pool.query('UPDATE user_balance SET balance=balance+?, total_recharged=total_recharged+? WHERE user_id=?', [amount, amount, targetUserId]);
+  }
+  res.json({ success: true, message: '充值成功', user_id: targetUserId, amount });
 }));
 
 module.exports = router;

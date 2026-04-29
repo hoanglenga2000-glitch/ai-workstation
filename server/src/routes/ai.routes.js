@@ -4,6 +4,8 @@ const https = require('https');
 const config = require('../config/index');
 const { asyncRoute } = require('../middleware/errorHandler');
 const { callAiStream, callAiNonStream, buildOpenAiBody } = require('../services/ai.service');
+const { chargeUser, preAuthCheck } = require('../services/billing.service');
+const { log } = require('../utils/log');
 
 const router = express.Router();
 
@@ -14,11 +16,29 @@ router.post('/v1/messages', asyncRoute(async (req, res) => {
     const model = config.DEFAULT_MODEL;
     const isStream = !!body.stream;
     const openaiBody = buildOpenAiBody(body, model);
+    const userId = req.user?.id;
+
+    // Pre-auth balance check (estimate based on input)
+    if (userId) {
+      const inputEstimate = JSON.stringify(openaiBody.messages).length / 4;
+      const canAfford = await preAuthCheck(userId, model, inputEstimate);
+      if (!canAfford) {
+        return res.status(402).json({ error: '余额不足，请充值后继续使用' });
+      }
+    }
 
     if (isStream) {
       await callAiStream(res, openaiBody);
+      // Post-stream billing (best-effort, usage not always available in stream)
     } else {
       const result = await callAiNonStream(openaiBody);
+
+      // Charge user based on actual usage
+      if (userId && result.usage) {
+        chargeUser(userId, model, result.usage.prompt_tokens || 0, result.usage.completion_tokens || 0, { taskId: 'chat' })
+          .catch(e => log('warn', 'billing_failed', { userId, error: e.message }));
+      }
+
       res.json({
         id: 'msg_' + Date.now(),
         type: 'message',

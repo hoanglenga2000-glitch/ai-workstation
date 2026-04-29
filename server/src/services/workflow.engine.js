@@ -39,9 +39,31 @@ function _expDeep(obj, ctx) {
   return obj;
 }
 
+const SSRF_BLOCK_PATTERNS = [
+  /^https?:\/\/(localhost|127\.\d+\.\d+\.\d+|0\.0\.0\.0)/i,
+  /^https?:\/\/10\.\d+\.\d+\.\d+/i,
+  /^https?:\/\/172\.(1[6-9]|2\d|3[01])\.\d+\.\d+/i,
+  /^https?:\/\/192\.168\.\d+\.\d+/i,
+  /^https?:\/\/169\.254\./i,
+  /^https?:\/\/\[?::1/i,
+  /^https?:\/\/\[?fd[0-9a-f]{2}:/i,
+];
+
+function _validateUrl(url) {
+  if (!url || typeof url !== 'string') throw new Error('httpRequest: url required');
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    throw new Error('httpRequest: only http/https allowed');
+  }
+  for (var i = 0; i < SSRF_BLOCK_PATTERNS.length; i++) {
+    if (SSRF_BLOCK_PATTERNS[i].test(url)) {
+      throw new Error('httpRequest: private network access denied');
+    }
+  }
+  return url;
+}
+
 async function _doHttp(params, ctx) {
-  var url = _exp(params.url || '', ctx);
-  if (!url) throw new Error('httpRequest: missing url');
+  var url = _validateUrl(_exp(params.url || '', ctx));
   var method = (params.method || params.requestMethod || 'GET').toUpperCase();
   var headers = {};
   var hp = params.options && params.options.headers && params.options.headers.parameters;

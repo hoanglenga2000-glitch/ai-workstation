@@ -10,12 +10,16 @@ module.exports = {
     env: {
       NODE_ENV: 'production',
     },
-    // Graceful shutdown
+    // Zero-downtime reload: wait for 'ready' signal before routing traffic
+    wait_ready: true,
+    listen_timeout: 15000,
     kill_timeout: 10000,
-    listen_timeout: 5000,
+    // Crash protection: stop if 5 restarts within 30s
+    max_restarts: 5,
+    min_uptime: 30000,
     // Logging
-    error_file: '/www/wwwroot/ai.zhjjq.tech/server/logs/error.log',
-    out_file: '/www/wwwroot/ai.zhjjq.tech/server/logs/out.log',
+    error_file: './logs/error.log',
+    out_file: './logs/out.log',
     merge_logs: true,
     log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
   }]

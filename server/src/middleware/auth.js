@@ -49,24 +49,27 @@ async function blacklistJwt(token, expiresInSec) {
 
 const AUTH_PUBLIC_PATHS = [
   /^\/v1\/messages$/,
+  /^\/v1\/chat\/completions$/,
   /^\/healthz$/,
-  /^\/auth\//,
-  /^\/api\/market\//,
-  /^\/api\/scenarios/,
-  /^\/api\/token\//,
-  /^\/api\/stats\//,
-  /^\/api\/activities/,
-  /^\/api\/approvals/,
-  /^\/api\/tasks/,
-  /^\/api\/agents/,
-  /^\/agents/,
-  /^\/api\/workflows/,
-  /^\/knowledge/,
-  /^\/api\/knowledge/,
+  /^\/auth\/(login|register|settings)$/,
+  /^\/auth\/refresh$/,
 ];
 
-function isPublic(path) {
-  return AUTH_PUBLIC_PATHS.some((pattern) => pattern.test(path));
+const AUTH_PUBLIC_GET_ONLY = [
+  /^\/api\/market\/(agents|models)$/,
+  /^\/api\/market\/agents\/\d+$/,
+  /^\/api\/scenarios$/,
+  /^\/api\/scenarios\/\d+\/agents$/,
+  /^\/knowledge$/,
+  /^\/api\/knowledge$/,
+];
+
+function isPublic(req) {
+  const path = typeof req === 'string' ? req : req.path;
+  if (AUTH_PUBLIC_PATHS.some((p) => p.test(path))) return true;
+  const method = typeof req === 'string' ? 'GET' : req.method;
+  if (method === 'GET' && AUTH_PUBLIC_GET_ONLY.some((p) => p.test(path))) return true;
+  return false;
 }
 
 function hashPassword(plain) {
@@ -166,15 +169,18 @@ function tokenAuth(req) {
   return !!session;
 }
 
-// Rate limiter (in-memory, will be replaced by Redis in Phase 2)
-const loginAttempts = new Map();
-function loginRateLimit(ip) {
-  const now = Date.now();
-  const rec = loginAttempts.get(ip);
-  if (rec && now - rec.first < 60000 && rec.count >= 10) return false;
-  if (!rec || now - rec.first > 60000) loginAttempts.set(ip, { first: now, count: 1 });
-  else rec.count++;
-  return true;
+// Redis-backed login rate limiter (cluster-safe)
+async function loginRateLimit(ip) {
+  try {
+    const redis = getRedis();
+    const key = 'login:rl:' + ip;
+    const count = await redis.incr(key);
+    if (count === 1) await redis.expire(key, 60);
+    return count <= 10;
+  } catch (e) {
+    log('warn', 'login_rl_redis_failed', { ip, error: e.message });
+    return true;
+  }
 }
 
 // Cookie parsing middleware
@@ -185,7 +191,7 @@ function cookieParser(req, _res, next) {
 
 // Auth enforcement middleware (supports both Cookie and JWT Bearer)
 function authGate(req, res, next) {
-  if (isPublic(req.path)) return next();
+  if (isPublic(req)) return next();
 
   // /workflows browser navigation: skip auth (SPA handles it)
   if (req.path === '/workflows' || req.path === '/workflows/') return next();
@@ -251,5 +257,4 @@ module.exports = {
   authGate,
   seedAdmin,
   isPublic,
-  AUTH_PUBLIC_PATHS,
 };

@@ -4,14 +4,38 @@ const { log } = require('../utils/log');
 
 const router = express.Router();
 
-// Health check (before auth)
-router.get('/healthz', (_req, res) => res.json({ status: 'ok', ts: Date.now() }));
+// Health check (before auth) — deep check with MySQL + Redis
+router.get('/healthz', async (_req, res) => {
+  const checks = {};
+  try {
+    const { getPool } = require('../config/database');
+    await getPool().query('SELECT 1');
+    checks.mysql = 'ok';
+  } catch (e) {
+    checks.mysql = 'error: ' + e.message;
+  }
+  try {
+    const { getRedis } = require('../config/redis');
+    await getRedis().ping();
+    checks.redis = 'ok';
+  } catch (e) {
+    checks.redis = 'error: ' + e.message;
+  }
+  const allOk = Object.values(checks).every(v => v === 'ok');
+  res.status(allOk ? 200 : 503).json({
+    status: allOk ? 'ok' : 'degraded',
+    uptime: Math.floor(process.uptime()),
+    checks,
+    ts: Date.now(),
+  });
+});
 
 // Mount all route modules
 router.use(require('./auth.routes'));
 router.use(require('./ai.routes'));
 router.use(require('./market.routes'));
 router.use(require('./token.routes'));
+router.use(require('./payment.routes'));
 router.use(require('./agent.routes'));
 router.use(require('./task.routes'));
 router.use(require('./workflow.routes'));

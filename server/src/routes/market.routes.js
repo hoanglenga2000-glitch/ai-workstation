@@ -36,12 +36,17 @@ router.post('/api/market/agents/:id/use', asyncRoute(async (req, res) => {
   if (!agentRows.length) return res.status(404).json({ error: 'Agent not found' });
   const agent = agentRows[0];
 
+  const userId = req.user ? req.user.id : null;
+  if (!userId) return res.status(401).json({ error: '请先登录' });
+
   if (agent.price_type !== 'free') {
-    tokenAuth(req);
-    const userId = req.user ? req.user.id : null;
-    if (!userId) return res.status(401).json({ error: '请先登录' });
-    const [balanceRows] = await pool.query('SELECT * FROM user_balance WHERE user_id=?', [userId]);
-    if (!balanceRows.length || balanceRows[0].balance < (agent.price || 0)) {
+    const cost = agent.price || 0;
+    // Atomic deduction — prevents race condition
+    const [deductResult] = await pool.query(
+      'UPDATE user_balance SET balance = balance - ?, total_consumed = total_consumed + ? WHERE user_id = ? AND balance >= ?',
+      [cost, cost, userId, cost]
+    );
+    if (deductResult.affectedRows === 0) {
       return res.status(402).json({ error: '余额不足' });
     }
   }
@@ -56,17 +61,17 @@ router.post('/api/market/agents/:id/use', asyncRoute(async (req, res) => {
 
     await pool.query(
       'INSERT INTO agent_usage_log (agent_id, user_id, input_text, output_text, tokens_used) VALUES (?,?,?,?,?)',
-      [agentId, req.user ? req.user.id : null, userMessage, result.content, result.usage?.total_tokens || 0]
+      [agentId, userId, userMessage, result.content, result.usage?.total_tokens || 0]
     );
-
-    if (agent.price_type !== 'free' && req.user) {
-      const cost = agent.price || 0;
-      await pool.query('UPDATE user_balance SET balance=balance-?, total_consumed=total_consumed+? WHERE user_id=?', [cost, cost, req.user.id]);
-    }
 
     await pool.query('UPDATE agent_market SET usage_count=usage_count+1 WHERE id=?', [agentId]);
     res.json({ success: true, response: result.content, usage: result.usage });
   } catch (e) {
+    // Refund on AI failure for paid agents
+    if (agent.price_type !== 'free') {
+      const cost = agent.price || 0;
+      await pool.query('UPDATE user_balance SET balance = balance + ?, total_consumed = total_consumed - ? WHERE user_id = ?', [cost, cost, userId]);
+    }
     res.status(502).json({ error: 'AI 调用失败: ' + e.message });
   }
 }));

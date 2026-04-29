@@ -41,10 +41,11 @@ router.put('/agents/:id', asyncRoute(async (req, res) => {
 // ============== MESSAGES (chat) ==============
 router.get('/agents/:id/messages', asyncRoute(async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit || '50', 10) || 50, 200);
+  const userId = req.user?.id;
   const pool = getPool();
   const [rows] = await pool.query(
-    'SELECT * FROM messages WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?',
-    [req.params.id, limit],
+    'SELECT * FROM messages WHERE agent_id = ? AND (user_id = ? OR user_id IS NULL) ORDER BY created_at DESC LIMIT ?',
+    [req.params.id, userId, limit],
   );
   res.json(rows.reverse());
 }));
@@ -57,8 +58,8 @@ const agentMessageHandler = asyncRoute(async (req, res) => {
   const pool = getPool();
 
   const [userInsert] = await pool.query(
-    'INSERT INTO messages (conversation_id, agent_id, role, content) VALUES (1, ?, ?, ?)',
-    [agentId, role, content],
+    'INSERT INTO messages (conversation_id, agent_id, user_id, role, content) VALUES (1, ?, ?, ?, ?)',
+    [agentId, req.user?.id || null, role, content],
   );
 
   if (role !== 'user') {
@@ -70,8 +71,8 @@ const agentMessageHandler = asyncRoute(async (req, res) => {
   const agent = agents[0];
 
   const [history] = await pool.query(
-    'SELECT role, content FROM messages WHERE agent_id = ? ORDER BY created_at DESC LIMIT 20',
-    [agentId],
+    'SELECT role, content FROM messages WHERE agent_id = ? AND (user_id = ? OR user_id IS NULL) ORDER BY created_at DESC LIMIT 20',
+    [agentId, req.user?.id || null],
   );
   const messages = history.reverse();
   const [availWfs] = await pool.query(
@@ -99,8 +100,9 @@ const agentMessageHandler = asyncRoute(async (req, res) => {
     [agentId, aiContent],
   );
 
-  if (global.wsManager) {
-    global.wsManager.sendToConversation(1, 'new-message', {
+  const io = req.app.get('io');
+  if (io) {
+    io.to('conversation-1').emit('new-message', {
       id: aiInsert.insertId, conversation_id: 1, agent_id: agentId, role: 'assistant', content: aiContent, created_at: new Date().toISOString(),
     });
   }

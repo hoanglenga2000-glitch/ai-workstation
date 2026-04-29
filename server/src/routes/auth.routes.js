@@ -34,7 +34,7 @@ router.post('/auth/register', asyncRoute(async (req, res) => {
 
 router.post('/auth/login', asyncRoute(async (req, res) => {
   const ip = req.ip || 'unknown';
-  if (!loginRateLimit(ip)) return res.status(429).json({ error: '登录尝试过多，请稍后再试' });
+  if (!(await loginRateLimit(ip))) return res.status(429).json({ error: '登录尝试过多，请稍后再试' });
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: '请输入用户名和密码' });
   const pool = getPool();

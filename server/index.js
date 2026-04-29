@@ -20,8 +20,9 @@ const server = app.listen(config.PORT, config.HOST, () => {
   const { Server } = require('socket.io');
   const io = new Server(server, {
     cors: {
-      origin: "*",
-      methods: ["GET", "POST"]
+      origin: ['https://ai.zhjjq.tech', 'http://localhost:5173'],
+      methods: ['GET', 'POST'],
+      credentials: true,
     }
   });
 
@@ -41,39 +42,19 @@ const server = app.listen(config.PORT, config.HOST, () => {
     log('warn', 'socket_redis_adapter_unavailable', { error: e.message });
   }
 
-  class WSManager {
-    constructor(io) {
-      this.io = io;
-      this.connections = new Map();
+  io.on('connection', (socket) => {
+    socket.on('join-conversation', (conversationId) => {
+      socket.join(`conversation-${conversationId}`);
+    });
+  });
 
-      io.on('connection', (socket) => {
-        log('info', 'ws_connect', { id: socket.id });
-        this.connections.set(socket.id, socket);
-
-        socket.on('disconnect', () => {
-          log('info', 'ws_disconnect', { id: socket.id });
-          this.connections.delete(socket.id);
-        });
-
-        socket.on('join-conversation', (conversationId) => {
-          socket.join(`conversation-${conversationId}`);
-        });
-      });
-    }
-
-    sendToConversation(conversationId, event, data) {
-      this.io.to(`conversation-${conversationId}`).emit(event, data);
-    }
-
-    broadcast(event, data) {
-      this.io.emit(event, data);
-    }
-  }
-
-  const wsManager = new WSManager(io);
-  global.wsManager = wsManager;
+  // Expose via app for route handlers (avoids global)
+  app.set('io', io);
 
   log('info', 'websocket_initialized', { connections: 0 });
+
+  // Notify PM2 this worker is ready to accept traffic
+  if (process.send) process.send('ready');
 });
 
 // Graceful shutdown
