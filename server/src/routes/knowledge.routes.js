@@ -34,6 +34,7 @@ router.get('/knowledge', asyncRoute(async (req, res) => {
     res.set('Cache-Control', 'no-store');
     return res.sendFile(path.join(__dirname, '../../..', 'index.html'));
   }
+  if (!req.user) return res.status(401).json({ error: '请先登录' });
 
   const { department, search, category } = req.query;
   let sql = 'SELECT * FROM knowledge_docs WHERE 1=1';
@@ -47,6 +48,7 @@ router.get('/knowledge', asyncRoute(async (req, res) => {
 }));
 
 router.get('/knowledge/search', asyncRoute(async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: '请先登录' });
   const pool = getPool();
   const { q } = req.query;
   if (!q) return res.json([]);
@@ -59,6 +61,7 @@ router.get('/knowledge/search', asyncRoute(async (req, res) => {
 }));
 
 router.get('/knowledge/:id', asyncRoute(async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: '请先登录' });
   const pool = getPool();
   const [[row]] = await pool.query('SELECT * FROM knowledge_docs WHERE id = ?', [req.params.id]);
   if (!row) return res.status(404).json({ error: 'Knowledge item not found' });
@@ -66,6 +69,7 @@ router.get('/knowledge/:id', asyncRoute(async (req, res) => {
 }));
 
 router.post('/knowledge', asyncRoute(async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: '请先登录' });
   const pool = getPool();
   const { title, category, department, content, file_type } = req.body || {};
   if (!title) return res.status(400).json({ error: 'title required' });
@@ -77,6 +81,7 @@ router.post('/knowledge', asyncRoute(async (req, res) => {
 }));
 
 router.delete('/knowledge/:id', asyncRoute(async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: '请先登录' });
   const pool = getPool();
   const [rows] = await pool.query('SELECT file_path FROM knowledge_docs WHERE id = ?', [req.params.id]);
   if (rows.length && rows[0].file_path) {
@@ -88,6 +93,7 @@ router.delete('/knowledge/:id', asyncRoute(async (req, res) => {
 }));
 
 router.post('/knowledge/upload', upload.single('file'), asyncRoute(async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: '请先登录' });
   const pool = getPool();
   if (!req.file) return res.status(400).json({ error: 'no file uploaded' });
   const { category, department } = req.body || {};
@@ -112,6 +118,7 @@ router.post('/knowledge/upload', upload.single('file'), asyncRoute(async (req, r
 
 // Activity logs
 router.get('/activity-logs', asyncRoute(async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: '请先登录' });
   const pool = getPool();
   const limit = Math.min(parseInt(req.query.limit || '20', 10) || 20, 200);
   const [rows] = await pool.query(
@@ -123,6 +130,7 @@ router.get('/activity-logs', asyncRoute(async (req, res) => {
 }));
 
 router.post('/activity-logs', asyncRoute(async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: '请先登录' });
   const pool = getPool();
   const { agent_id, action, detail } = req.body || {};
   if (!agent_id || !action) return res.status(400).json({ error: 'agent_id and action required' });

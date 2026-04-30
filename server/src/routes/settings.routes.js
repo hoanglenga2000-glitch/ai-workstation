@@ -8,8 +8,9 @@ const router = express.Router();
 
 // Notifications — 用户只能看到自己的通知
 router.get('/notifications', asyncRoute(async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: '请先登录' });
   const pool = getPool();
-  const userId = req.user?.id;
+  const userId = req.user.id;
   let sql = 'SELECT * FROM notifications';
   const params = [];
   // 如果 notifications 表有 user_id 字段则按用户过滤，否则返回全部
@@ -30,21 +31,28 @@ router.get('/notifications', asyncRoute(async (req, res) => {
 }));
 
 router.put('/notifications/:id/read', asyncRoute(async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: '请先登录' });
   const pool = getPool();
-  await pool.query('UPDATE notifications SET is_read = 1 WHERE id = ?', [req.params.id]);
+  await pool.query('UPDATE notifications SET is_read = 1 WHERE id = ? AND (user_id = ? OR user_id IS NULL)', [req.params.id, req.user.id]);
   res.json({ success: true });
 }));
 
-router.put('/notifications/read-all', asyncRoute(async (_req, res) => {
+router.put('/notifications/read-all', asyncRoute(async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: '请先登录' });
   const pool = getPool();
-  await pool.query('UPDATE notifications SET is_read = 1');
+  await pool.query('UPDATE notifications SET is_read = 1 WHERE user_id = ? OR user_id IS NULL', [req.user.id]);
   res.json({ success: true });
 }));
 
 // Settings
-router.get('/settings', asyncRoute(async (_req, res) => {
+router.get('/settings', asyncRoute(async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: '请先登录' });
   const pool = getPool();
-  const [rows] = await pool.query('SELECT * FROM settings');
+  const [rows] = await pool.query(
+    req.user.role === 'admin'
+      ? 'SELECT * FROM settings'
+      : "SELECT * FROM settings WHERE key_name NOT LIKE '%secret%' AND key_name NOT LIKE '%key%' AND key_name NOT LIKE '%password%'"
+  );
   const out = {};
   rows.forEach((r) => { out[r.key_name] = parseJsonColumn(r.value); });
   res.json(out);
@@ -64,18 +72,22 @@ router.put('/settings/:key', asyncRoute(async (req, res) => {
 }));
 
 // Dashboard stats
-router.get('/dashboard/stats', asyncRoute(async (_req, res) => {
+router.get('/dashboard/stats', asyncRoute(async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: '请先登录' });
   const pool = getPool();
   const [[{ tasks_done }]] = await pool.query("SELECT COUNT(*) AS tasks_done FROM tasks WHERE status='done'");
   const [[{ agents_online }]] = await pool.query("SELECT COUNT(*) AS agents_online FROM agents WHERE status IN ('online','busy')");
   const [[{ pending_approvals }]] = await pool.query("SELECT COUNT(*) AS pending_approvals FROM approvals WHERE status='pending'");
   const [[{ total_runs }]] = await pool.query("SELECT COUNT(*) AS total_runs FROM workflow_runs WHERE started_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)");
+  const [[{ monthly_revenue }]] = await pool.query(
+    "SELECT COALESCE(SUM(tokens_granted), 0) AS monthly_revenue FROM payment_orders WHERE status='paid' AND MONTH(paid_at)=MONTH(CURDATE()) AND YEAR(paid_at)=YEAR(CURDATE())"
+  );
   res.json({
     tasks_done,
     agents_online,
     pending_approvals,
     workflow_runs_30d: total_runs,
-    monthly_revenue: 1250000,
+    monthly_revenue,
   });
 }));
 

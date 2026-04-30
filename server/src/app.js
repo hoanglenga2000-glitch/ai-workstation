@@ -1,6 +1,7 @@
 'use strict';
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const path = require('path');
 const config = require('./config/index');
 const { cookieParser, authGate, seedAdmin } = require('./middleware/auth');
@@ -13,6 +14,12 @@ const { log } = require('./utils/log');
 function createApp() {
   const app = express();
   app.set('trust proxy', 1);
+
+  // Security headers
+  app.use(helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+  }));
 
   // CORS
   app.use(cors({

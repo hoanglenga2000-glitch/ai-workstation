@@ -60,8 +60,7 @@ const AUTH_PUBLIC_GET_ONLY = [
   /^\/(api\/)?market\/agents\/\d+$/,
   /^\/(api\/)?market\/models\/[\w\-]+$/,
   /^\/(api\/)?scenarios/,
-  /^\/knowledge$/,
-  /^\/(api\/)?knowledge$/,
+
 ];
 
 function isPublic(req) {
