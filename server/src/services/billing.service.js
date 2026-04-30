@@ -38,7 +38,7 @@ async function chargeUser(userId, model, inputTokens, outputTokens, meta) {
     await conn.beginTransaction();
     const [r] = await conn.query(
       'UPDATE user_balance SET balance = balance - ?, total_consumed = total_consumed + ? WHERE user_id = ? AND balance >= ?',
-      [costCny, costCny, userId, costCny]
+      [platformTokens, platformTokens, userId, platformTokens]
     );
     if (r.affectedRows === 0) {
       await conn.rollback();
@@ -49,7 +49,7 @@ async function chargeUser(userId, model, inputTokens, outputTokens, meta) {
       [crypto.randomUUID(), userId, meta?.taskId || 'direct', model, inputTokens, outputTokens, platformTokens, costCny]
     );
     await conn.commit();
-    log('info', 'billing_charge', { userId, model, inputTokens, outputTokens, costCny: costCny.toFixed(6) });
+    log('info', 'billing_charge', { userId, model, inputTokens, outputTokens, platformTokens, costCny: costCny.toFixed(6) });
     return { charged: platformTokens, costCny };
   } catch (e) {
     await conn.rollback();
@@ -61,9 +61,10 @@ async function chargeUser(userId, model, inputTokens, outputTokens, meta) {
 }
 
 async function preAuthCheck(userId, model, estimatedInputTokens) {
-  const { costCny } = estimateCost(model, estimatedInputTokens, estimatedInputTokens);
+  // 用 estimatedInputTokens * 2 估算 output（长文生成场景 output 可能远大于 input）
+  const { platformTokens } = estimateCost(model, estimatedInputTokens, estimatedInputTokens * 2);
   const balance = await checkBalance(userId);
-  return balance >= costCny;
+  return balance >= platformTokens;
 }
 
 module.exports = { estimateCost, checkBalance, chargeUser, preAuthCheck, MODEL_PRICING };

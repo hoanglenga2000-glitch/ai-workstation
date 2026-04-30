@@ -21,10 +21,12 @@ router.get('/api/token/usage', asyncRoute(async (req, res) => {
   if (!req.user) return res.status(401).json({ error: '请先登录' });
   const userId = req.user.id;
   const { limit = 50, offset = 0 } = req.query;
+  const safeLimit = Math.min(Math.max(parseInt(limit) || 50, 1), 200);
+  const safeOffset = Math.max(parseInt(offset) || 0, 0);
   const pool = getPool();
   const [rows] = await pool.query(
-    'SELECT tu.*, am.name as agent_name, mm.model_name FROM token_usage tu LEFT JOIN agent_market am ON tu.agent_id = am.id LEFT JOIN model_market mm ON tu.model_id = mm.model_id WHERE tu.user_id=? ORDER BY tu.created_at DESC LIMIT ? OFFSET ?',
-    [userId, parseInt(limit), parseInt(offset)]
+    'SELECT tul.id, tul.user_id, tul.task_id, tul.model_used, tul.input_tokens, tul.output_tokens, tul.platform_tokens_cost AS total_tokens, tul.actual_cost_cny AS cost, tul.created_at FROM token_usage_logs tul WHERE tul.user_id=? ORDER BY tul.created_at DESC LIMIT ? OFFSET ?',
+    [userId, safeLimit, safeOffset]
   );
   res.json(rows);
 }));
@@ -35,9 +37,9 @@ router.get('/api/token/stats', asyncRoute(async (req, res) => {
   const pool = getPool();
   const [balanceRows] = await pool.query('SELECT * FROM user_balance WHERE user_id=?', [userId]);
   const balance = balanceRows.length ? balanceRows[0] : { balance: 0, free_quota: 10000 };
-  const [todayRows] = await pool.query('SELECT SUM(total_tokens) as tokens, SUM(cost) as cost FROM token_usage WHERE user_id=? AND DATE(created_at)=CURDATE()', [userId]);
+  const [todayRows] = await pool.query('SELECT SUM(platform_tokens_cost) as tokens, SUM(actual_cost_cny) as cost FROM token_usage_logs WHERE user_id=? AND DATE(created_at)=CURDATE()', [userId]);
   const today = todayRows[0] || { tokens: 0, cost: 0 };
-  const [monthRows] = await pool.query('SELECT SUM(total_tokens) as tokens, SUM(cost) as cost FROM token_usage WHERE user_id=? AND YEAR(created_at)=YEAR(CURDATE()) AND MONTH(created_at)=MONTH(CURDATE())', [userId]);
+  const [monthRows] = await pool.query('SELECT SUM(platform_tokens_cost) as tokens, SUM(actual_cost_cny) as cost FROM token_usage_logs WHERE user_id=? AND YEAR(created_at)=YEAR(CURDATE()) AND MONTH(created_at)=MONTH(CURDATE())', [userId]);
   const month = monthRows[0] || { tokens: 0, cost: 0 };
   res.json({
     balance: balance.balance || 0,

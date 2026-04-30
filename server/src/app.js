@@ -16,7 +16,7 @@ function createApp() {
 
   // CORS
   app.use(cors({
-    origin: ['https://ai.zhjjq.tech', 'http://ai.zhjjq.tech', 'http://localhost:5173'],
+    origin: ['https://ai.zhjjq.tech', 'http://localhost:5173', 'http://localhost:3000'],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Cookie']

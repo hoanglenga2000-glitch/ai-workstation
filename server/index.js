@@ -4,6 +4,7 @@ const { getPool, closePool } = require('./src/config/database');
 const { getRedis, closeRedis } = require('./src/config/redis');
 const { createApp, seedAdmin, initRateLimiter } = require('./src/app');
 const { log } = require('./src/utils/log');
+const { startPendingCompensator } = require('./src/jobs/pending-compensator');
 
 const app = createApp();
 
@@ -55,6 +56,10 @@ const server = app.listen(config.PORT, config.HOST, () => {
 
   // Notify PM2 this worker is ready to accept traffic
   if (process.send) process.send('ready');
+
+  // 启动 Pending 流水单补偿任务
+  startPendingCompensator();
+  log('info', 'pending_compensator_started');
 });
 
 // Graceful shutdown

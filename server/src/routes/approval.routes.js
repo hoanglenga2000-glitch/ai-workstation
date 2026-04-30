@@ -5,6 +5,13 @@ const { asyncRoute } = require('../middleware/errorHandler');
 
 const router = express.Router();
 
+// 管理员权限检查中间件
+function requireAdmin(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: '请先登录' });
+  if (req.user.role !== 'admin') return res.status(403).json({ error: '需要管理员权限' });
+  next();
+}
+
 router.get('/approvals', asyncRoute(async (req, res) => {
   const pool = getPool();
   const { status, submitter } = req.query;
@@ -38,7 +45,7 @@ router.post('/approvals', asyncRoute(async (req, res) => {
   res.json({ id: r.insertId, success: true });
 }));
 
-router.put('/approvals/:id', asyncRoute(async (req, res) => {
+router.put('/approvals/:id', requireAdmin, asyncRoute(async (req, res) => {
   const pool = getPool();
   const { status, reason } = req.body || {};
   if (status && !['pending', 'approved', 'rejected'].includes(status)) return res.status(400).json({ error: 'invalid status' });
@@ -46,19 +53,19 @@ router.put('/approvals/:id', asyncRoute(async (req, res) => {
   res.json({ success: true });
 }));
 
-router.delete('/approvals/:id', asyncRoute(async (req, res) => {
+router.delete('/approvals/:id', requireAdmin, asyncRoute(async (req, res) => {
   const pool = getPool();
   await pool.query('DELETE FROM approvals WHERE id = ?', [req.params.id]);
   res.json({ success: true });
 }));
 
-router.put('/approvals/:id/approve', asyncRoute(async (req, res) => {
+router.put('/approvals/:id/approve', requireAdmin, asyncRoute(async (req, res) => {
   const pool = getPool();
   await pool.query('UPDATE approvals SET status = ?, resolved_at = NOW() WHERE id = ?', ['approved', req.params.id]);
   res.json({ success: true });
 }));
 
-router.put('/approvals/:id/reject', asyncRoute(async (req, res) => {
+router.put('/approvals/:id/reject', requireAdmin, asyncRoute(async (req, res) => {
   const pool = getPool();
   await pool.query('UPDATE approvals SET status = ?, resolved_at = NOW() WHERE id = ?', ['rejected', req.params.id]);
   res.json({ success: true });

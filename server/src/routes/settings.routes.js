@@ -36,6 +36,9 @@ router.get('/settings', asyncRoute(async (_req, res) => {
 }));
 
 router.put('/settings/:key', asyncRoute(async (req, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: '需要管理员权限' });
+  }
   const pool = getPool();
   const value = JSON.stringify(req.body && Object.prototype.hasOwnProperty.call(req.body, 'value') ? req.body.value : req.body);
   await pool.query(
