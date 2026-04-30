@@ -48,20 +48,20 @@ async function blacklistJwt(token, expiresInSec) {
 }
 
 const AUTH_PUBLIC_PATHS = [
-  /^\/v1\/messages$/,
-  /^\/v1\/chat\/completions$/,
   /^\/healthz$/,
-  /^\/auth\/(login|register|settings)$/,
-  /^\/auth\/refresh$/,
+  /^\/(api\/)?auth\/(login|register)$/,
+  /^\/(api\/)?auth\/refresh$/,
+  /^\/(api\/)?payment\/plans$/,
 ];
 
 const AUTH_PUBLIC_GET_ONLY = [
-  /^\/api\/market\/(agents|models)$/,
-  /^\/api\/market\/agents\/\d+$/,
-  /^\/api\/scenarios$/,
-  /^\/api\/scenarios\/\d+\/agents$/,
+  /^\/(api\/)?auth\/me$/,
+  /^\/(api\/)?market\/(agents|models)$/,
+  /^\/(api\/)?market\/agents\/\d+$/,
+  /^\/(api\/)?market\/models\/[\w\-]+$/,
+  /^\/(api\/)?scenarios/,
   /^\/knowledge$/,
-  /^\/api\/knowledge$/,
+  /^\/(api\/)?knowledge$/,
 ];
 
 function isPublic(req) {
