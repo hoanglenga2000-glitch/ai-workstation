@@ -97,7 +97,7 @@ router.post('/api/payment/fulfill/:id', asyncRoute(async (req, res) => {
     );
     await conn.query(
       'INSERT INTO user_balance (user_id, balance, total_recharged) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE balance = balance + VALUES(balance), total_recharged = total_recharged + VALUES(total_recharged)',
-      [order.user_id, order.amount_cny, order.amount_cny]
+      [order.user_id, order.tokens_granted, order.tokens_granted]
     );
     await conn.commit();
     log('info', 'payment_fulfilled', { order_id: order.id, user_id: order.user_id, tokens: order.tokens_granted });

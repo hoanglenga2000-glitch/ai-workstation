@@ -20,7 +20,7 @@ router.post('/auth/register', asyncRoute(async (req, res) => {
   if (dup.length) return res.status(409).json({ error: '用户名已存在' });
   const [r] = await pool.query("INSERT INTO auth_users (username, password_hash, role, status) VALUES (?, ?, 'user', 'active')", [username, hashPassword(password)]);
   const userId = r.insertId;
-  await pool.query('INSERT INTO user_balance (user_id, balance, total_recharged, total_consumed) VALUES (?, 10.00, 0, 0)', [userId]);
+  await pool.query('INSERT INTO user_balance (user_id, balance, total_recharged, total_consumed) VALUES (?, 10000, 0, 0)', [userId]);
   const user = { id: userId, username, role: 'user' };
   const token = issueCookie(res, user);
   const resp = { success: true, user, token };

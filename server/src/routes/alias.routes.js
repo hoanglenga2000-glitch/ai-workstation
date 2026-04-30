@@ -23,7 +23,9 @@ router.get("/api/activities", asyncRoute(async (req, res) => {
 }));
 
 router.get("/api/approvals", asyncRoute(async (req, res) => {
-  res.json([]);
+  const pool = getPool();
+  const [rows] = await pool.query("SELECT ap.*, COALESCE(a.name, ap.submitter) AS submitter_name FROM approvals ap LEFT JOIN agents a ON ap.submitter = a.id WHERE ap.status = 'pending' ORDER BY ap.created_at DESC");
+  res.json(rows);
 }));
 
 router.get("/api/agents", asyncRoute(async (_req, res) => {
